@@ -1,0 +1,87 @@
+# 5-node consensus cluster (node4 is the Byzantine adversary in PBFT mode),
+# a Toxiproxy network simulator on the client ingress, and a client.
+#
+#   MODE=pbax  -> defaults to pbft. Override per run:
+#     MODE=paxos docker compose up        # crash/partition demo (5 honest nodes)
+#     MODE=pbft  docker compose up         # Byzantine demo (node4 malicious)
+#     ADVERSARY_MODE=suppress|forge|equivocate  selects the attack
+
+services:
+  # One-shot: generate the shared Ed25519 keys for PBFT into the keys volume.
+  init-keys:
+    build: .
+    entrypoint: ["python", "crypto_utils.py", "--nodes", "5", "--out", "/app/keys"]
+    volumes:
+      - keys:/app/keys
+    networks: [cluster]
+
+  node0: &node
+    build: .
+    volumes:
+      - keys:/app/keys
+      - data:/app/data
+    depends_on:
+      init-keys:
+        condition: service_completed_successfully
+    networks: [cluster]
+    environment:
+      NODE_ID: 0
+      ROLE: node
+      MODE: ${MODE:-pbft}
+
+  node1:
+    <<: *node
+    environment: {NODE_ID: 1, ROLE: node, MODE: "${MODE:-pbft}"}
+
+  node2:
+    <<: *node
+    environment: {NODE_ID: 2, ROLE: node, MODE: "${MODE:-pbft}"}
+
+  node3:
+    <<: *node
+    environment: {NODE_ID: 3, ROLE: node, MODE: "${MODE:-pbft}"}
+
+  # The 1 adversary: runs adversary.py in PBFT mode, honest node.py in Paxos.
+  node4:
+    <<: *node
+    environment:
+      NODE_ID: 4
+      ROLE: adversary
+      MODE: ${MODE:-pbft}
+      ADVERSARY_MODE: ${ADVERSARY_MODE:-equivocate}
+
+  # Network simulator: client reaches the cluster through this proxy so we can
+  # inject latency / loss / partition on the ingress. API on 8474.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.11.0
+    command: ["-host", "0.0.0.0", "-config", "/toxiproxy.json"]
+    volumes:
+      - ./toxiproxy.json:/toxiproxy.json:ro
+    ports:
+      - "8474:8474"     # Toxiproxy HTTP API (for chaos_test.sh)
+      - "20000:20000"   # cluster ingress (client -> node0)
+    networks: [cluster]
+    depends_on: [node0]
+
+  # Submits concurrent transactions. Reaches node0 via Toxiproxy; others direct.
+  # Run on demand:  docker compose run --rm client
+  client:
+    build: .
+    profiles: ["client"]
+    entrypoint:
+      - python
+      - client.py
+      - --peers
+      - "0:toxiproxy:20000,1:node1:9000,2:node2:9000,3:node3:9000,4:node4:9000"
+      - --count
+      - "8"
+      - --concurrent
+    networks: [cluster]
+    depends_on: [toxiproxy]
+
+networks:
+  cluster: {}
+
+volumes:
+  keys: {}
+  data: {}

@@ -1,0 +1,8 @@
+[
+  {
+    "name": "cluster_ingress",
+    "listen": "0.0.0.0:20000",
+    "upstream": "node0:9000",
+    "enabled": true
+  }
+]

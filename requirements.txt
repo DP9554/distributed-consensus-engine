@@ -1,0 +1,3 @@
+cryptography>=42.0
+# Note: networking uses the Python standard library (asyncio, sockets) only.
+# Toxiproxy runs as its own Docker service and needs no Python package.
